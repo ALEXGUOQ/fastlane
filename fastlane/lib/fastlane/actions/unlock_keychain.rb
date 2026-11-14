@@ -1,0 +1,125 @@
+require 'security'
+
+module Fastlane
+  module Actions
+    class UnlockKeychainAction < Action
+      def self.run(params)
+        keychain_path = FastlaneCore::Helper.keychain_path(params[:path])
+        add_to_search_list = params[:add_to_search_list]
+
+        # add to search list if not already added
+        if add_to_search_list == true || add_to_search_list == :add
+          add_keychain_to_search_list(keychain_path)
+        elsif add_to_search_list == :replace
+          replace_keychain_in_search_list(keychain_path)
+        end
+
+        default_keychain(keychain_path) if params[:set_default]
+
+        # Log the full path, useful for troubleshooting
+        UI.message("Unlocking keychain at path: #{keychain_path}")
+        # unlock given keychain and disable lock and timeout
+        keychain = Security::Keychain.new(keychain_path)
+        UI.user_error!("Could not unlock keychain '#{keychain_path}'") unless keychain.unlock(params[:password])
+        UI.user_error!("Could not change the settings of keychain '#{keychain_path}'") unless keychain.update_settings
+      end
+
+      def self.add_keychain_to_search_list(keychain_path)
+        keychains = Security::Keychain.list(:user).map(&:filename)
+        return if keychains.include?(keychain_path)
+
+        UI.user_error!("Could not add '#{keychain_path}' to the keychain search list") unless Security::Keychain.set_search_list(keychains + [keychain_path])
+      end
+
+      def self.replace_keychain_in_search_list(keychain_path)
+        begin
+          UI.message("Reading existing default keychain")
+          Actions.lane_context[Actions::SharedValues::ORIGINAL_DEFAULT_KEYCHAIN] = Security::Keychain.default_keychain&.filename
+        rescue Security::Error => e
+          raise unless e.message.include?("A default keychain could not be found")
+        end
+        UI.user_error!("Could not replace the keychain search list with '#{keychain_path}'") unless Security::Keychain.set_search_list([keychain_path])
+      end
+
+      def self.default_keychain(keychain_path)
+        UI.user_error!("Could not make '#{keychain_path}' the default keychain") unless Security::Keychain.set_default_keychain(keychain_path)
+      end
+
+      #####################################################
+      # @!group Documentation
+      #####################################################
+
+      def self.description
+        "Unlock a keychain"
+      end
+
+      def self.details
+        [
+          "Unlocks the given keychain file and adds it to the keychain search list.",
+          "Keychains can be replaced with `add_to_search_list: :replace`."
+        ].join("\n")
+      end
+
+      def self.available_options
+        [
+          FastlaneCore::ConfigItem.new(key: :path,
+                                       env_name: "FL_UNLOCK_KEYCHAIN_PATH",
+                                       description: "Path to the keychain file",
+                                       default_value: "login",
+                                       optional: false),
+          FastlaneCore::ConfigItem.new(key: :password,
+                                       env_name: "FL_UNLOCK_KEYCHAIN_PASSWORD",
+                                       sensitive: true,
+                                       description: "Keychain password",
+                                       optional: false),
+          FastlaneCore::ConfigItem.new(key: :add_to_search_list,
+                                       env_name: "FL_UNLOCK_KEYCHAIN_ADD_TO_SEARCH_LIST",
+                                       description: "Add to keychain search list, valid values are true, false, :add, and :replace",
+                                       skip_type_validation: true, # allow Boolean, Symbol
+                                       default_value: true),
+          FastlaneCore::ConfigItem.new(key: :set_default,
+                                       env_name: "FL_UNLOCK_KEYCHAIN_SET_DEFAULT",
+                                       description: "Set as default keychain",
+                                       type: Boolean,
+                                       default_value: false)
+
+        ]
+      end
+
+      def self.authors
+        ["xfreebird"]
+      end
+
+      def self.is_supported?(platform)
+        true
+      end
+
+      def self.example_code
+        [
+          'unlock_keychain( # Unlock an existing keychain and add it to the keychain search list
+            path: "/path/to/KeychainName.keychain",
+            password: "mysecret"
+          )',
+          'unlock_keychain( # By default the keychain is added to the existing. To replace them with the selected keychain you may use `:replace`
+            path: "/path/to/KeychainName.keychain",
+            password: "mysecret",
+            add_to_search_list: :replace # To only add a keychain use `true` or `:add`.
+          )',
+          'unlock_keychain( # In addition, the keychain can be selected as a default keychain
+            path: "/path/to/KeychainName.keychain",
+            password: "mysecret",
+            set_default: true
+          )',
+          'unlock_keychain( # If the keychain file is located in the standard location `~/Library/Keychains`, then it is sufficient to provide the keychain file name, or file name with its suffix.
+            path: "KeychainName",
+            password: "mysecret"
+          )'
+        ]
+      end
+
+      def self.category
+        :misc
+      end
+    end
+  end
+end

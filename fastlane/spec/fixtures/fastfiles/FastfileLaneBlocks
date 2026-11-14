@@ -1,0 +1,37 @@
+before_all do
+  File.write("#{FASTLANE_SPEC_SCRATCH}/before_all", '1')
+end
+
+before_each do |lane|
+  open("#{FASTLANE_SPEC_SCRATCH}/before_each", 'a') { |f| f << lane }
+end
+
+after_all do |lane|
+  File.write("#{FASTLANE_SPEC_SCRATCH}/after_all", lane)
+end
+
+after_each do |lane|
+  open("#{FASTLANE_SPEC_SCRATCH}/after_each", 'a') { |f| f << lane }
+end
+
+error do |lane, exception|
+  File.write("#{FASTLANE_SPEC_SCRATCH}/error", lane)
+end
+
+platform :ios do
+  desc "run_ios runner"
+  lane :run_ios do
+    lane1
+    lane2
+  end
+
+  desc "lane1 runner"
+  lane :lane1 do
+    puts "lane1"
+  end
+
+  desc "lane2 runner"
+  lane :lane2 do
+    puts "lane2"
+  end
+end

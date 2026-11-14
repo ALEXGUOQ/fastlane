@@ -1,0 +1,157 @@
+describe Commander::Runner do
+  describe 'tool collector interactions' do
+    class CommandsGenerator
+      include Commander::Methods
+
+      def initialize(raise_error: nil)
+        @raise_error = raise_error
+      end
+
+      def run
+        program :name, 'tool_name'
+        program :version, '1.9'
+        program :description, 'Description'
+
+        # This is required because we're running this real Commander instance inside of
+        # the real rspec tests command. When we run rspec for all projects, these options
+        # get set, and Commander is going to validate that they are something that our
+        # fake program accepts.
+        #
+        # This is not ideal, but the downside is potential broken tests in the future,
+        # which we can quickly adjust.
+        global_option('--format', String)
+        global_option('--out', String)
+
+        command :run do |c|
+          c.action do |args, options|
+            raise @raise_error if @raise_error
+          end
+        end
+
+        default_command(:run)
+
+        run!
+      end
+    end
+  end
+
+  describe '#handle_unknown_error' do
+    class CustomError < StandardError
+      def preferred_error_info
+        ['Title', 'Line 1', 'Line 2']
+      end
+    end
+
+    class NilReturningError < StandardError
+      def preferred_error_info
+        nil
+      end
+    end
+
+    it 'should reraise errors that are not of special interest' do
+      expect do
+        Commander::Runner.new.handle_unknown_error!(StandardError.new('my message'))
+      end.to raise_error(StandardError, '[!] my message'.red)
+    end
+
+    it 'should reraise errors that return nil from #preferred_error_info' do
+      expect do
+        Commander::Runner.new.handle_unknown_error!(NilReturningError.new('my message'))
+      end.to raise_error(StandardError, '[!] my message'.red)
+    end
+
+    it 'should abort and show custom info for errors that have the Apple error info provider method with FastlaneCore::Globals.verbose?=false' do
+      runner = Commander::Runner.new
+      expect(runner).to receive(:abort).with("\n[!] Title\n\tLine 1\n\tLine 2".red)
+
+      FastlaneSpec::Env.with_verbose(false) do
+        runner.handle_unknown_error!(CustomError.new)
+      end
+    end
+
+    it 'should reraise and show custom info for errors that have the Apple error info provider method with FastlaneCore::Globals.verbose?=true' do
+      FastlaneSpec::Env.with_verbose(true) do
+        expect do
+          Commander::Runner.new.handle_unknown_error!(CustomError.new)
+        end.to raise_error(CustomError, "[!] Title\n\tLine 1\n\tLine 2".red)
+      end
+    end
+  end
+
+  describe '#suggest_ruby_reinstall' do
+    it 'suggests the Ruby version fastlane recommends' do
+      errors = []
+      allow(FastlaneCore::UI).to receive(:error) { |message| errors << message }
+
+      Commander::Runner.new.suggest_ruby_reinstall(StandardError.new('my message'))
+
+      expect(errors).to include("  - Run `brew update && brew upgrade ruby-build && rbenv install #{Fastlane::SUGGESTED_MINIMUM_RUBY}`")
+      expect(errors).to include("  - Run `rbenv global #{Fastlane::SUGGESTED_MINIMUM_RUBY}` to make it the new global default Ruby version")
+      expect(errors).to include("  - Then run `rvm reinstall ruby-#{Fastlane::SUGGESTED_MINIMUM_RUBY}`")
+    end
+  end
+
+  describe '#rescue_fastlane_error' do
+    it 'calls show_github_issues if e.show_github_issues is true' do
+      runner = Commander::Runner.new
+      error = FastlaneCore::Interface::FastlaneShellError.new(show_github_issues: true)
+      allow(error).to receive(:message).and_return('error message')
+      expect(runner).to receive(:show_github_issues).with('error message')
+      expect(runner).to receive(:display_user_error!)
+
+      runner.rescue_fastlane_error(error)
+    end
+
+    it 'does not call show_github_issues if e.show_github_issues is false' do
+      runner = Commander::Runner.new
+      error = FastlaneCore::Interface::FastlaneShellError.new(show_github_issues: false)
+      allow(error).to receive(:message).and_return('error message')
+      expect(runner).to_not(receive(:show_github_issues))
+      expect(runner).to receive(:display_user_error!)
+
+      runner.rescue_fastlane_error(error)
+    end
+  end
+
+  describe 'Xcode version warning' do
+    let(:warning) { /Support for your Xcode version \(15\.4\) is going away. fastlane will soon require Xcode 16\.0 or newer/ }
+
+    def run_with_xcode(version)
+      allow(FastlaneCore::Helper).to receive(:xcode_version).and_return(version)
+      runner = Commander::Runner.new([])
+      runner.program(:name, 'tool_name')
+      runner.program(:version, '1.0')
+      runner.program(:description, 'Description')
+      runner.command(:run) { |c| c.action {} }
+      runner.default_command(:run)
+      runner.run!
+    end
+
+    before do
+      stub_const("Fastlane::SUGGESTED_MINIMUM_XCODE_RELEASE", "16.0")
+      allow(FastlaneCore::UI).to receive(:important)
+    end
+
+    it 'warns when Xcode is older than SUGGESTED_MINIMUM_XCODE_RELEASE' do
+      expect(FastlaneCore::UI).to receive(:important).with(warning)
+      run_with_xcode("15.4")
+    end
+
+    it 'does not warn when Xcode is SUGGESTED_MINIMUM_XCODE_RELEASE' do
+      expect(FastlaneCore::UI).not_to receive(:important).with(/Support for your Xcode version/)
+      run_with_xcode("16.0")
+    end
+
+    it 'does not warn when FASTLANE_SKIP_XCODE_VERSION_WARNING is set' do
+      expect(FastlaneCore::UI).not_to receive(:important).with(/Support for your Xcode version/)
+      FastlaneSpec::Env.with_env_values('FASTLANE_SKIP_XCODE_VERSION_WARNING' => 'true') do
+        run_with_xcode("15.4")
+      end
+    end
+
+    it 'does not warn without Xcode' do
+      expect(FastlaneCore::UI).not_to receive(:important).with(/Support for your Xcode version/)
+      run_with_xcode(nil)
+    end
+  end
+end
